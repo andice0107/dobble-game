@@ -542,6 +542,10 @@
       border-color: #1d4ed8;
     }
 
+    .neutral-circle {
+      border-color: #475569;
+    }
+
     #scoreToggleBtn {
       display: none;
     }
@@ -994,6 +998,7 @@
     let correctCount = 0;
     let wrongCount = 0;
     let clickedElements = new Set();
+    let cardMarked = {};
     let isAnswerRevealed = false;
     let roundAnswered = false;
     let timeExpired = false;
@@ -1268,6 +1273,7 @@
       if (timerInterval) clearInterval(timerInterval);
       
       clickedElements.clear();
+      cardMarked = {};
       isAnswerRevealed = false;
       roundAnswered = false;
       timeExpired = false;
@@ -1424,6 +1430,12 @@
       
       if (clickedElements.has(clickKey)) return;
       
+      const prevMark = cardMarked[cardId];
+      if (prevMark && prevMark.div !== elementDiv) {
+        prevMark.circle.remove();
+        prevMark.div.classList.remove('clicked');
+        clickedElements.delete(prevMark.key);
+      }
       clickedElements.add(clickKey);
       elementDiv.classList.add('clicked');
       
@@ -1439,14 +1451,10 @@
       circle.style.left = (rect.left - cardRect.left + rect.width / 2 - size / 2) + 'px';
       circle.style.top = (rect.top - cardRect.top + rect.height / 2 - size / 2) + 'px';
       
-      const isCorrect = elementContent === currentAnswer || 
-                       (elementDiv.querySelector('img') && elementDiv.querySelector('img').src === currentAnswer);
       
-      if (isCorrect) {
-        circle.classList.add('correct-circle');
-      } else {
-        circle.classList.add('wrong-circle');
-      }
+      
+      circle.classList.add('neutral-circle');
+      cardMarked[cardId] = { div: elementDiv, circle, key: clickKey };
       
       card.querySelector('.card-content').appendChild(circle);
       
