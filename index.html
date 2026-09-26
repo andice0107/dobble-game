@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 數位塔寶遊戲・主持人版 v1.0 | 由 dobble-game 複製：新增主持人模式、參賽者計分、不限時兩段式按鍵 -->
+<!-- 數位塔寶遊戲・主持人版 v2 | v1＋6/9不共存（被去掉的一方以他元素替補，答案唯一性不變） -->
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
@@ -858,6 +858,17 @@
       
       <div class="setting-group">
         <label class="checkbox-label">
+          <input type="checkbox" id="enableSound" checked>
+          <span>🔊 開啟音效（答對／答錯／按鍵／時間到）</span>
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" id="enableBgm">
+          <span>🎵 背景音樂（遊戲中循環播放）</span>
+        </label>
+      </div>
+      
+      <div class="setting-group">
+        <label class="checkbox-label">
           <input type="checkbox" id="showAnswer">
           <span>開啟解答功能</span>
         </label>
@@ -1096,12 +1107,20 @@
       
       document.getElementById('imageUpload').addEventListener('change', handleImageUpload);
       document.getElementById('startBtn').addEventListener('click', startGame);
-      document.getElementById('settingsBtn').addEventListener('click', () => showPage('settingsPage'));
+      document.getElementById('settingsBtn').addEventListener('click', () => { bgmStop(); showPage('settingsPage'); });
       document.getElementById('answerBtn').addEventListener('click', revealAnswer);
       document.getElementById('nextBtn').addEventListener('click', handleNextRound);
       document.getElementById('pauseBtn').addEventListener('click', pauseGame);
       document.getElementById('resumeBtn').addEventListener('click', resumeGame);
       document.getElementById('giveUpBtn').addEventListener('click', handleGiveUp);
+      document.addEventListener('pointerdown', function() {
+        try {
+          if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+        } catch (e) {}
+      }, { passive: true });
+      document.getElementById('enableBgm').addEventListener('change', function() {
+        if (this.checked) ensureAudio();
+      });
       document.querySelectorAll('input[name="gameMode"]').forEach(radio => {
         radio.addEventListener('change', function() {
           document.getElementById('contestantGroup').style.display =
@@ -1118,6 +1137,7 @@
         const i = parseInt(btn.dataset.idx, 10);
         if (btn.dataset.act === 'plus') {
           contestantScores[i]++;
+          playScore();
         } else {
           contestantScores[i] = Math.max(0, contestantScores[i] - 1);
         }
@@ -1126,7 +1146,7 @@
       document.getElementById('scoreToggleBtn').addEventListener('click', function() {
         document.body.classList.toggle('scores-open');
       });
-      document.getElementById('returnBtn').addEventListener('click', () => showPage('settingsPage'));
+      document.getElementById('returnBtn').addEventListener('click', () => { bgmStop(); showPage('settingsPage'); });
     }
     
     function showPage(pageId) {
@@ -1161,7 +1181,9 @@
         maxWrong: parseInt(document.getElementById('maxWrong').value),
         showAnswer: document.getElementById('showAnswer').checked,
         autoAnswer: document.getElementById('autoAnswer').checked,
-        enableColors: document.getElementById('enableColors').checked
+        enableColors: document.getElementById('enableColors').checked,
+        soundEnabled: document.getElementById('enableSound').checked,
+        bgmEnabled: document.getElementById('enableBgm').checked
       };
       gameSettings.hostMode = document.querySelector('input[name="gameMode"]:checked').value === 'host';
 
@@ -1212,8 +1234,8 @@
       // 添加上傳的圖片
       allElements = allElements.concat(uploadedImages);
       
-      if (allElements.length < gameSettings.elementCount) {
-        alert(`元素不足！需要至少 ${gameSettings.elementCount} 個元素`);
+      if (allElements.length < gameSettings.elementCount * 2 - 1) {
+        alert(`元素不足！每張卡 ${gameSettings.elementCount} 個需要至少 ${gameSettings.elementCount * 2 - 1} 個不重複元素，目前只有 ${allElements.length} 個。請降低數量或增加元素（數字模式建議每卡不超過 5 個）。`);
         return;
       }
       
@@ -1223,11 +1245,13 @@
       document.getElementById('correctCount').textContent = '0';
       document.getElementById('wrongCount').textContent = '0';
       
+      bgmStart();
       showPage('gamePage');
       setTimeout(nextRound, 100);
     }
     
     function handleNextRound() {
+      document.getElementById('nextBtn').disabled = true;
       // 如果本回合還沒答題，記為答錯並顯示解答
       if (!roundAnswered) {
         roundAnswered = true;
@@ -1257,7 +1281,7 @@
     
     function nextRound() {
       const now = Date.now();
-      if (now - lastAdvance < 1000) return;
+      if (now - lastAdvance < 400) { updateButtons(); return; }
       lastAdvance = now;
       hidePauseOverlay();
       currentRound++;
@@ -1302,6 +1326,29 @@
       }
     }
     
+    const CONFUSE_GROUPS = [['6', '9'], ['ㄇ', 'ㄈ', 'ㄩ']];
+
+    function resolveConfusables(card1Elements, card2Elements, commonElement) {
+      CONFUSE_GROUPS.forEach(group => {
+        const present = group.filter(g =>
+          card1Elements.includes(g) || card2Elements.includes(g));
+        if (present.length <= 1) return;
+        const keep = present.includes(commonElement) ? commonElement : present[0];
+        [card1Elements, card2Elements].forEach((arr, idx) => {
+          const other = idx === 0 ? card2Elements : card1Elements;
+          for (let i = 0; i < arr.length; i++) {
+            if (arr[i] === keep || !group.includes(arr[i])) continue;
+            const pool = allElements.filter(e =>
+              !(group.includes(e) && e !== keep) && !other.includes(e));
+            const fresh = pool.filter(e => !arr.includes(e));
+            const src = fresh.length > 0 ? fresh : pool;
+            if (src.length === 0) continue;
+            arr[i] = src[Math.floor(Math.random() * src.length)];
+          }
+        });
+      });
+    }
+
     function generateCards() {
       const count = gameSettings.elementCount;
       const shuffled = [...allElements].sort(() => Math.random() - 0.5);
@@ -1310,6 +1357,7 @@
       const commonElement = card1Elements[Math.floor(Math.random() * count)];
       card2Elements.push(commonElement);
       card2Elements.sort(() => Math.random() - 0.5);
+      resolveConfusables(card1Elements, card2Elements, commonElement);
       currentAnswer = commonElement;
       
       const container = document.getElementById('cardsContainer');
@@ -1438,6 +1486,7 @@
       }
       clickedElements.add(clickKey);
       elementDiv.classList.add('clicked');
+      playClick();
       
       const card = document.getElementById(cardId);
       const rect = elementDiv.getBoundingClientRect();
@@ -1477,6 +1526,7 @@
           correctCount++;
           document.getElementById('correctCount').textContent = correctCount;
           updateButtons();
+          playCorrect();
           setTimeout(() => {
             alert('✅ 答對了！');
             setTimeout(nextRound, 500);
@@ -1487,6 +1537,7 @@
           wrongCount++;
           document.getElementById('wrongCount').textContent = wrongCount;
           updateButtons();
+          playWrong();
           
           // 顯示正確答案
           showCorrectAnswer();
@@ -1545,6 +1596,107 @@
           nextRound();
         }
       }, 2000);
+    }
+
+    let audioCtx = null;
+    let bgmTimer = null;
+    let bgmStep = 0;
+    const BGM_NOTES = [261.63, 329.63, 392.0, 523.25, 392.0, 329.63, 440.0, 392.0];
+
+    function ensureAudio() {
+      try {
+        if (!audioCtx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return null;
+          audioCtx = new AC();
+        }
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        return audioCtx;
+      } catch (e) { return null; }
+    }
+
+    function tone(freq, dur, type, gain, delay, force) {
+      if (!force && !gameSettings.soundEnabled) return;
+      const ctx = ensureAudio();
+      if (!ctx) return;
+      try {
+        const t = ctx.currentTime + (delay || 0);
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = type || 'sine';
+        o.frequency.setValueAtTime(freq, t);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(gain || 0.15, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.start(t);
+        o.stop(t + dur + 0.05);
+      } catch (e) {}
+    }
+
+    function playClick() { tone(660, 0.08, 'triangle', 0.07); }
+    function playCorrect() {
+      tone(523.25, 0.12, 'sine', 0.18);
+      tone(659.25, 0.12, 'sine', 0.18, 0.1);
+      tone(783.99, 0.22, 'sine', 0.18, 0.2);
+    }
+    function playWrong() {
+      tone(196, 0.25, 'sawtooth', 0.09);
+      tone(147, 0.3, 'sawtooth', 0.09, 0.12);
+    }
+    function playTimeUp() {
+      tone(880, 0.15, 'square', 0.07);
+      tone(880, 0.15, 'square', 0.07, 0.2);
+    }
+    function playScore() { tone(987.77, 0.15, 'sine', 0.14); }
+    function playFanfare() {
+      [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, 0.18, 'triangle', 0.14, i * 0.13));
+    }
+
+    function bgmStart() {
+      bgmStop();
+      if (!gameSettings.bgmEnabled) return;
+      if (!ensureAudio()) return;
+      bgmStep = 0;
+      bgmTimer = setInterval(() => {
+        try {
+          if (!gameSettings.bgmEnabled || !audioCtx) return;
+          if (audioCtx.state !== 'running') {
+            audioCtx.resume().catch(() => {});
+            return;
+          }
+          if (!document.getElementById('gamePage').classList.contains('active')) return;
+          const ctx = audioCtx;
+          const t = ctx.currentTime;
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'triangle';
+          o.frequency.setValueAtTime(BGM_NOTES[bgmStep % BGM_NOTES.length], t);
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(0.035, t + 0.05);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start(t);
+          o.stop(t + 0.5);
+          bgmStep++;
+        } catch (e) {}
+      }, 450);
+    }
+
+    function bgmStop() {
+      if (bgmTimer) { clearInterval(bgmTimer); bgmTimer = null; }
+    }
+
+    function audioSuspend() {
+      try { if (audioCtx && audioCtx.state === 'running') audioCtx.suspend(); } catch (e) {}
+    }
+
+    function audioResume() {
+      try {
+        if (audioCtx && audioCtx.state === 'suspended' && gameSettings.bgmEnabled) audioCtx.resume();
+      } catch (e) {}
     }
 
     function esc(s) {
@@ -1785,7 +1937,11 @@
         div.style.left = (p.x - p.size / 2) + 'px';
         div.style.top = (p.y - p.size / 2) + 'px';
         div.style.fontSize = (p.size * 0.75) + 'px';
-        div.style.transform = `rotate(${Math.random() * 360}deg)`;
+        if (isTextElement) {
+          div.style.transform = `rotate(${(Math.random() * 50 - 25).toFixed(1)}deg)`;
+        } else {
+          div.style.transform = `rotate(${Math.random() * 360}deg)`;
+        }
         
         div.addEventListener('click', (e) => handleElementClick(e, cardId, p.element));
         
@@ -1820,6 +1976,7 @@ function tickTimer() {
         document.getElementById('timer').textContent = '時間到！';
         timeExpired = true;
         updateButtons();
+        playTimeUp();
 
         if (gameSettings.showAnswer) {
           const answerBtn = document.getElementById('answerBtn');
@@ -1841,12 +1998,14 @@ function tickTimer() {
         timerInterval = null;
       }
       document.getElementById('pauseOverlay').style.display = 'flex';
+      audioSuspend();
     }
 
     function resumeGame() {
       if (!isPaused) return;
       isPaused = false;
       document.getElementById('pauseOverlay').style.display = 'none';
+      audioResume();
       if (gameSettings.displayTime > 0 && !roundAnswered && !timeExpired && !timerInterval) {
         timerInterval = setInterval(tickTimer, 1000);
       }
@@ -1884,6 +2043,8 @@ function tickTimer() {
       document.getElementById('finalCorrect').textContent = correctCount;
       document.getElementById('finalWrong').textContent = wrongCount;
       document.getElementById('accuracy').textContent = accuracy;
+      bgmStop();
+      playFanfare();
       
       if (gameSettings.hostMode) {
         renderHostResult();
